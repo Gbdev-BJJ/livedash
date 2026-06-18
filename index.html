@@ -8649,7 +8649,7 @@ showTudo();
     if(document.getElementById('sbLogoutBtn')) return;
     const b=document.createElement('button');
     b.id='sbLogoutBtn'; b.textContent='Sair';
-    b.style.cssText='position:fixed;bottom:14px;left:14px;z-index:99998;background:#1a1d2b;color:#cbd0e0;border:1px solid #2c3142;border-radius:9px;padding:7px 13px;font-size:12px;font-weight:600;cursor:pointer;opacity:.85';
+    b.style.cssText='position:fixed;bottom:54px;left:14px;z-index:99998;background:#1a1d2b;color:#cbd0e0;border:1px solid #2c3142;border-radius:9px;padding:7px 13px;font-size:12px;font-weight:600;cursor:pointer;opacity:.85';
     b.onclick=async function(){
       try{ await cloudPush(true); }catch(e){}
       LA_KEYS.forEach(function(k){ localStorage.removeItem(k); }); // limpa local pra nao vazar p/ proximo login
@@ -8729,7 +8729,15 @@ showTudo();
     function navTo(k){
       if(k==='comissao'){ var b=document.querySelector('.tab[data-tab="comissao"]'); if(b) b.click(); setActive(k); window.scrollTo({top:0,behavior:'smooth'}); return; }
       if(!document.body.classList.contains('tudo-mode')){ var t=document.querySelector('.tab[data-tab="tudo"]'); if(t) t.click(); }
-      setTimeout(function(){ var el=document.querySelector('[data-tab-content="'+k+'"]'); if(el) el.scrollIntoView({behavior:'smooth',block:'start'}); setActive(k); }, 90);
+      setActive(k);
+      function targetY(){
+        var el=document.querySelector('[data-tab-content="'+k+'"]'); if(!el) return null;
+        var topbar=(window.matchMedia&&window.matchMedia('(max-width:900px)').matches)?(((document.querySelector('.ld-side')||{}).offsetHeight||64)+8):12;
+        var y=el.getBoundingClientRect().top+window.pageYOffset-topbar; return y<0?0:y;
+      }
+      var y=targetY(); if(y!=null){ try{ window.scrollTo({top:y,behavior:'smooth'}); }catch(e){ window.scrollTo(0,y); } }
+      // 2a tentativa garantida: se o smooth nao moveu (timing da nuvem), rola direto
+      setTimeout(function(){ var y2=targetY(); if(y2!=null && Math.abs(window.pageYOffset-y2)>40){ window.scrollTo(0,y2); } }, 430);
     }
     side.addEventListener('click', function(e){ var i=e.target.closest('.ld-i'); if(i) navTo(i.getAttribute('data-go')); });
     setActive('visao');
