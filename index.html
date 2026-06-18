@@ -8726,18 +8726,29 @@ showTudo();
     side.innerHTML='<div class="ld-brand"><div class="m"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l3-4 3 3 4-6"/></svg></div><div><div class="nm">LiveDash</div><div class="tg">Tok &amp; Decor</div></div></div><nav class="ld-nav"><div class="h">Painel</div>'+items+'</nav><div class="ld-foot">Live commerce · TikTok</div>';
     document.body.insertBefore(side, document.body.firstChild);
     function setActive(k){ side.querySelectorAll('.ld-i').forEach(function(x){ x.classList.toggle('on', x.getAttribute('data-go')===k); }); }
+    function ldDbg(msg){ var d=document.getElementById('ldDbg'); if(!d){ d=document.createElement('div'); d.id='ldDbg'; d.style.cssText='position:fixed;left:8px;bottom:96px;z-index:2147483646;background:#000;color:#0f0;font:11px/1.35 monospace;padding:6px 8px;border-radius:6px;max-width:92vw;white-space:pre-wrap;opacity:.92'; document.body.appendChild(d); } d.textContent=msg; }
     function navTo(k){
       if(k==='comissao'){ var b=document.querySelector('.tab[data-tab="comissao"]'); if(b) b.click(); setActive(k); window.scrollTo({top:0,behavior:'smooth'}); return; }
       if(!document.body.classList.contains('tudo-mode')){ var t=document.querySelector('.tab[data-tab="tudo"]'); if(t) t.click(); }
       setActive(k);
-      function targetY(){
-        var el=document.querySelector('[data-tab-content="'+k+'"]'); if(!el) return null;
-        var topbar=(window.matchMedia&&window.matchMedia('(max-width:900px)').matches)?(((document.querySelector('.ld-side')||{}).offsetHeight||64)+8):12;
-        var y=el.getBoundingClientRect().top+window.pageYOffset-topbar; return y<0?0:y;
+      function scrollNow(smooth){
+        var el=document.querySelector('[data-tab-content="'+k+'"]');
+        if(!el){ ldDbg('alvo NAO encontrado: '+k); return; }
+        var off=(window.matchMedia&&window.matchMedia('(max-width:900px)').matches)?(((document.querySelector('.ld-side')||{}).offsetHeight||64)+8):12;
+        var cur=window.pageYOffset||document.documentElement.scrollTop||document.body.scrollTop||0;
+        var y=el.getBoundingClientRect().top+cur-off; if(y<0)y=0;
+        try{ el.scrollIntoView(smooth?{behavior:'smooth',block:'start'}:{block:'start'}); }catch(e){}
+        try{ window.scrollTo(smooth?{top:y,behavior:'smooth'}:{top:y}); }catch(e){ try{window.scrollTo(0,y);}catch(_){} }
+        if(document.scrollingElement) document.scrollingElement.scrollTop=y;
+        document.documentElement.scrollTop=y; document.body.scrollTop=y;
+        // procura QUALQUER ancestral rolavel e rola ele
+        var p=el.parentElement, g=0, hit='';
+        while(p && g++<14){ try{ var ov=getComputedStyle(p).overflowY; if(p.scrollHeight>p.clientHeight+4 && (ov==='auto'||ov==='scroll')){ p.scrollTop=el.offsetTop-off; hit=(p.className||p.tagName); } }catch(e){} p=p.parentElement; }
+        ldDbg('go '+k+' | y='+Math.round(y)+' scY='+Math.round(window.pageYOffset)+' docH='+document.documentElement.scrollHeight+' winH='+window.innerHeight+(hit?(' | innerScroller='+hit):' | semInnerScroller'));
       }
-      var y=targetY(); if(y!=null){ try{ window.scrollTo({top:y,behavior:'smooth'}); }catch(e){ window.scrollTo(0,y); } }
-      // 2a tentativa garantida: se o smooth nao moveu (timing da nuvem), rola direto
-      setTimeout(function(){ var y2=targetY(); if(y2!=null && Math.abs(window.pageYOffset-y2)>40){ window.scrollTo(0,y2); } }, 430);
+      scrollNow(true);
+      setTimeout(function(){ scrollNow(false); }, 220);
+      setTimeout(function(){ scrollNow(false); }, 480);
     }
     side.addEventListener('click', function(e){ var i=e.target.closest('.ld-i'); if(i) navTo(i.getAttribute('data-go')); });
     setActive('visao');
