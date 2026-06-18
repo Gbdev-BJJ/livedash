@@ -5861,6 +5861,10 @@ const SNAPSHOT_STAMP = 'snap-1781487749731-uu0gfi';
     // Se tem dados salvos, USA SÓ ELES (sem merge com seed embutido).
     // O seed só serve pra primeira execução; depois, o user manda.
     STORES = local;
+  } else {
+    // PRIMEIRA execução: grava o seed no localStorage agora, pra sincronização
+    // da nuvem ter dado REAL pra subir (e nunca subir {} vazio, que zerava tudo).
+    try{ saveStores(); }catch(e){}
   }
   if(STORES.length>0 && !CURRENT_STORE_ID) CURRENT_STORE_ID = STORES[0].id;
 })();
@@ -8605,7 +8609,11 @@ showTudo();
     try{
       const r = await SB.from(TABLE).select('data, updated_at').eq('key', rowKey()).maybeSingle();
       if(r.error){ console.warn('pull', r.error); sessionStorage.setItem('sb-synced','1'); return 'ok'; }
-      if(r.data && r.data.data){
+      // Valida se a nuvem tem LOJAS de verdade. Se não tiver, trata como vazia
+      // e NÃO apaga o localStorage (era isso que voltava pra "primeira versão").
+      var cloudStores=null;
+      try{ if(r.data && r.data.data){ var bb=(typeof r.data.data==='string')?JSON.parse(r.data.data):r.data.data; cloudStores = (bb && bb['la-stores']) ? JSON.parse(bb['la-stores']) : null; } }catch(e){}
+      if(r.data && r.data.data && Array.isArray(cloudStores) && cloudStores.length>0){
         const blob = (typeof r.data.data==='string') ? JSON.parse(r.data.data) : r.data.data;
         restoring=true;
         LA_KEYS.forEach(function(k){ if(blob[k]!=null) localStorage.setItem(k, blob[k]); else localStorage.removeItem(k); });
@@ -8614,7 +8622,7 @@ showTudo();
         location.reload();
         return 'reloaded';
       }
-      // nuvem vazia: sobe o que tiver local (primeira vez)
+      // nuvem vazia OU sem lojas: sobe o local (seed/edição) e NÃO apaga nada
       sessionStorage.setItem('sb-synced','1');
       await cloudPush(true);
       return 'ok';
@@ -8627,15 +8635,29 @@ showTudo();
     return blob;
   }
 
+  function sbToast(ok,txt){
+    try{
+      var t=document.getElementById('sbToast');
+      if(!t){ t=document.createElement('div'); t.id='sbToast'; t.style.cssText='position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:2147483640;padding:7px 14px;border-radius:999px;font:600 12px/1 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#fff;box-shadow:0 6px 20px rgba(0,0,0,.35);opacity:0;transition:opacity .25s;pointer-events:none'; document.body.appendChild(t); }
+      t.style.background = ok ? '#16a34a' : '#dc2626';
+      t.textContent = txt;
+      t.style.opacity='1';
+      clearTimeout(t._h); t._h=setTimeout(function(){ t.style.opacity='0'; }, ok?1400:4500);
+    }catch(e){}
+  }
   async function cloudPush(immediate){
     if(!currentUser) return;
     const doPush = async function(){
-      try{ await SB.from(TABLE).upsert({ key: rowKey(), data: gatherBlob(), updated_at: new Date().toISOString() }, { onConflict:'key' }); }
-      catch(e){ console.warn('push', e); }
+      pushTimer=null;
+      try{
+        var rr = await SB.from(TABLE).upsert({ key: rowKey(), data: gatherBlob(), updated_at: new Date().toISOString() }, { onConflict:'key' });
+        if(rr && rr.error){ console.warn('push', rr.error); sbToast(false,'Falha ao salvar na nuvem'); }
+        else { sbToast(true,'Salvo \u2713'); }
+      }catch(e){ console.warn('push', e); sbToast(false,'Falha ao salvar na nuvem'); }
     };
-    if(immediate){ await doPush(); return; }
-    if(pushTimer) clearTimeout(pushTimer);
-    pushTimer=setTimeout(doPush, 1500);
+    if(immediate){ if(pushTimer){ clearTimeout(pushTimer); pushTimer=null; } await doPush(); return; }
+    if(pushTimer) return;                 // já agendado neste tick -> junta o burst num push só
+    pushTimer=setTimeout(doPush, 0);      // dispara no próximo tick (quase imediato, antes de fechar)
   }
 
   function startPushHook(){
@@ -8643,6 +8665,10 @@ showTudo();
     const orig = localStorage.setItem.bind(localStorage);
     localStorage.setItem = function(k,v){ orig(k,v); if(!restoring && typeof k==='string' && k.indexOf('la-')===0){ cloudPush(false); } };
     try{ Object.defineProperty(localStorage,'__sbHook',{value:true}); }catch(e){}
+    // Garante que sobe antes de fechar a aba / trocar de app (mobile inclusive)
+    function flush(){ if(pushTimer){ clearTimeout(pushTimer); pushTimer=null; } cloudPush(true); }
+    document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='hidden') flush(); });
+    window.addEventListener('pagehide', flush);
   }
 
   function installLogoutButton(){
@@ -8726,14 +8752,13 @@ showTudo();
     side.innerHTML='<div class="ld-brand"><div class="m"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l3-4 3 3 4-6"/></svg></div><div><div class="nm">LiveDash</div><div class="tg">Tok &amp; Decor</div></div></div><nav class="ld-nav"><div class="h">Painel</div>'+items+'</nav><div class="ld-foot">Live commerce · TikTok</div>';
     document.body.insertBefore(side, document.body.firstChild);
     function setActive(k){ side.querySelectorAll('.ld-i').forEach(function(x){ x.classList.toggle('on', x.getAttribute('data-go')===k); }); }
-    function ldDbg(msg){ var d=document.getElementById('ldDbg'); if(!d){ d=document.createElement('div'); d.id='ldDbg'; d.style.cssText='position:fixed;left:8px;bottom:96px;z-index:2147483646;background:#000;color:#0f0;font:11px/1.35 monospace;padding:6px 8px;border-radius:6px;max-width:92vw;white-space:pre-wrap;opacity:.92'; document.body.appendChild(d); } d.textContent=msg; }
     function navTo(k){
       if(k==='comissao'){ var b=document.querySelector('.tab[data-tab="comissao"]'); if(b) b.click(); setActive(k); window.scrollTo({top:0,behavior:'smooth'}); return; }
       if(!document.body.classList.contains('tudo-mode')){ var t=document.querySelector('.tab[data-tab="tudo"]'); if(t) t.click(); }
       setActive(k);
       function scrollNow(smooth){
         var el=document.querySelector('[data-tab-content="'+k+'"]');
-        if(!el){ ldDbg('alvo NAO encontrado: '+k); return; }
+        if(!el){ return; }
         var off=(window.matchMedia&&window.matchMedia('(max-width:900px)').matches)?(((document.querySelector('.ld-side')||{}).offsetHeight||64)+8):12;
         var cur=window.pageYOffset||document.documentElement.scrollTop||document.body.scrollTop||0;
         var y=el.getBoundingClientRect().top+cur-off; if(y<0)y=0;
@@ -8744,7 +8769,6 @@ showTudo();
         // procura QUALQUER ancestral rolavel e rola ele
         var p=el.parentElement, g=0, hit='';
         while(p && g++<14){ try{ var ov=getComputedStyle(p).overflowY; if(p.scrollHeight>p.clientHeight+4 && (ov==='auto'||ov==='scroll')){ p.scrollTop=el.offsetTop-off; hit=(p.className||p.tagName); } }catch(e){} p=p.parentElement; }
-        ldDbg('go '+k+' | y='+Math.round(y)+' scY='+Math.round(window.pageYOffset)+' docH='+document.documentElement.scrollHeight+' winH='+window.innerHeight+(hit?(' | innerScroller='+hit):' | semInnerScroller'));
       }
       scrollNow(true);
       setTimeout(function(){ scrollNow(false); }, 220);
