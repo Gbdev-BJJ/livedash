@@ -8692,12 +8692,29 @@ showTudo();
     try{
       const r = await SB.from(TABLE).select('data, updated_at').eq('key', rowKey()).maybeSingle();
       if(r.error){ console.warn('pull', r.error); sessionStorage.setItem('sb-synced','1'); return 'ok'; }
-      // Valida se a nuvem tem LOJAS de verdade. Se não tiver, trata como vazia
-      // e NÃO apaga o localStorage (era isso que voltava pra "primeira versão").
-      var cloudStores=null;
-      try{ if(r.data && r.data.data){ var bb=(typeof r.data.data==='string')?JSON.parse(r.data.data):r.data.data; cloudStores = (bb && bb['la-stores']) ? JSON.parse(bb['la-stores']) : null; } }catch(e){}
-      if(r.data && r.data.data && Array.isArray(cloudStores) && cloudStores.length>0){
-        const blob = (typeof r.data.data==='string') ? JSON.parse(r.data.data) : r.data.data;
+      // --- estado da NUVEM: lojas + quando foi atualizada ---
+      var blob=null, cloudStores=null, cloudTime=0;
+      try{
+        if(r.data && r.data.data){
+          blob = (typeof r.data.data==='string') ? JSON.parse(r.data.data) : r.data.data;
+          if(blob && blob['la-stores']) cloudStores = JSON.parse(blob['la-stores']);
+        }
+        if(r.data && r.data.updated_at) cloudTime = new Date(r.data.updated_at).getTime() || 0;
+      }catch(e){}
+      // --- estado LOCAL: lojas + hora da última edição local ---
+      var localStores=null, localTime=0;
+      try{ var ls=localStorage.getItem('la-stores'); if(ls) localStores=JSON.parse(ls); }catch(e){}
+      try{ localTime = parseInt(localStorage.getItem('la-mtime')||'0',10) || 0; }catch(e){}
+      var hasLocal = Array.isArray(localStores) && localStores.length>0;
+      var hasCloud = Array.isArray(cloudStores) && cloudStores.length>0;
+      // 1) LOCAL mais novo que a nuvem -> NÃO sobrescreve (o push pode ter morrido ao fechar a aba); sobe o local
+      if(hasLocal && localTime > cloudTime){
+        sessionStorage.setItem('sb-synced','1');
+        await cloudPush(true);
+        return 'ok';
+      }
+      // 2) Nuvem tem lojas e é a mais recente -> restaura e recarrega
+      if(hasCloud && blob){
         restoring=true;
         LA_KEYS.forEach(function(k){ if(blob[k]!=null) localStorage.setItem(k, blob[k]); else localStorage.removeItem(k); });
         restoring=false;
@@ -8705,7 +8722,7 @@ showTudo();
         location.reload();
         return 'reloaded';
       }
-      // nuvem vazia OU sem lojas: sobe o local (seed/edição) e NÃO apaga nada
+      // 3) Nuvem vazia/sem lojas -> sobe o local (seed/edição) e NÃO apaga nada
       sessionStorage.setItem('sb-synced','1');
       await cloudPush(true);
       return 'ok';
@@ -8746,7 +8763,7 @@ showTudo();
   function startPushHook(){
     if(localStorage.__sbHook) return;
     const orig = localStorage.setItem.bind(localStorage);
-    localStorage.setItem = function(k,v){ orig(k,v); if(!restoring && typeof k==='string' && k.indexOf('la-')===0){ cloudPush(false); } };
+    localStorage.setItem = function(k,v){ orig(k,v); if(!restoring && typeof k==='string' && k.indexOf('la-')===0 && k!=='la-mtime'){ try{ orig('la-mtime', String(Date.now())); }catch(e){} cloudPush(false); } };
     try{ Object.defineProperty(localStorage,'__sbHook',{value:true}); }catch(e){}
     // Garante que sobe antes de fechar a aba / trocar de app (mobile inclusive)
     function flush(){ if(pushTimer){ clearTimeout(pushTimer); pushTimer=null; } cloudPush(true); }
