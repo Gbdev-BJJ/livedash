@@ -8325,55 +8325,67 @@ async function handleUpload(file){
     const ws = wb.Sheets[wb.SheetNames[0]];
     const rows = XLSX.utils.sheet_to_json(ws,{header:1,raw:false,defval:''});
 
-    // Parsers robustos pro formato real do TikTok (Creator Live Performance)
-    const money = v => {            // 'R$ 1.234,56' / 'R$ 0' -> número (BR: ponto=milhar, vírgula=decimal)
+    // ===== Leitura inteligente: mapeia colunas pelo CABEÇALHO (aguenta o TikTok mudar a ordem) =====
+    const _norm = s => String(s==null?'':s).trim().toLowerCase().replace(/\s+/g,' ');
+    let hRow = -1;
+    for(let i=0;i<Math.min(rows.length,15);i++){
+      const line=(rows[i]||[]).map(_norm);
+      if(line.indexOf('room title')>=0 || line.indexOf('room id')>=0){ hRow=i; break; }
+    }
+    if(hRow<0) hRow = 2;                         // fallback pro layout antigo (3 linhas de topo)
+    const _hdr = (rows[hRow]||[]).map(_norm);
+    const col = (...names) => {                  // acha a coluna pelo nome (exato; senão "contém")
+      for(const n of names){ const k=_norm(n); const e=_hdr.indexOf(k); if(e>=0) return e; }
+      for(const n of names){ const k=_norm(n); for(let j=0;j<_hdr.length;j++){ if(_hdr[j].indexOf(k)>=0) return j; } }
+      return -1;
+    };
+    const I = {
+      title:col('room title','title'), start:col('start time','start'), end:col('end time','end'),
+      dur:col('duration'), gmv:col('attributed gmv','gmv'), items:col('attributed items sold','items sold'),
+      orders:col('attributed orders','orders'), cust:col('customers'), aov:col('aov'),
+      views:col('views'), imp:col('impressions'), gmvph:col('gmv per hour','gmv/hour'),
+      avd:col('avg. viewing duration per view','avg. viewing duration','avg viewing duration'),
+      ctr:col('live ctr','ctr'), pimp:col('product impressions'), pclk:col('product clicks'),
+      nf:col('new followers'), fr:col('follow rate'), comm:col('comments'), shr:col('shares'), likes:col('likes')
+    };
+    const at = (r,i) => (i>=0 && r) ? r[i] : '';
+
+    // ===== Parsers de valor: aguentam BR (R$ 1.234,56) e US (R$1,234.56), além de K/M, % e s =====
+    const toNum = v => {
       if(v==null||v==='') return 0;
       if(typeof v==='number') return v;
-      let s = String(v).replace(/R\$/gi,'').replace(/\s/g,'');
-      if(s.includes(',')) s = s.replace(/\./g,'').replace(',','.');
-      return parseFloat(s)||0;
+      let s=String(v).trim(); if(!s) return 0;
+      let mult=1; const m=s.match(/([kmb])\s*$/i);
+      if(m){ mult={k:1e3,m:1e6,b:1e9}[m[1].toLowerCase()]; s=s.slice(0,m.index); }
+      s=s.replace(/[^\d.,-]/g,''); if(!s||s==='-') return 0;
+      const hasC=s.indexOf(',')>=0, hasD=s.indexOf('.')>=0;
+      if(hasC&&hasD){ s = s.lastIndexOf(',')>s.lastIndexOf('.') ? s.replace(/\./g,'').replace(',','.') : s.replace(/,/g,''); }
+      else if(hasC){ const p=s.split(','); s = (p.length===2 && p[1].length<=2) ? s.replace(',','.') : s.replace(/,/g,''); }
+      else if(hasD){ const p=s.split('.'); if(p.length>2) s=s.replace(/\./g,''); }
+      const n=parseFloat(s); return isFinite(n)? n*mult : 0;
     };
-    const numK = v => {            // '1.17K' / '5.34K' / '9.26M' / '405' -> número (ponto=decimal, K/M/B)
-      if(v==null||v==='') return 0;
-      if(typeof v==='number') return v;
-      let s = String(v).replace(/\s/g,'').toUpperCase();
-      let mult = 1;
-      if(s.endsWith('K')){ mult=1e3; s=s.slice(0,-1); }
-      else if(s.endsWith('M')){ mult=1e6; s=s.slice(0,-1); }
-      else if(s.endsWith('B')){ mult=1e9; s=s.slice(0,-1); }
-      s = s.replace(/,/g,'');
-      return Math.round((parseFloat(s)||0)*mult);
-    };
-    const pct = v => {            // '3.43%' -> 3.43
-      if(v==null||v==='') return 0;
-      if(typeof v==='number') return v;
-      return parseFloat(String(v).replace('%','').replace(',','.'))||0;
-    };
-    const secs = v => {           // '22.06s' -> 22.06
-      if(v==null||v==='') return 0;
-      if(typeof v==='number') return v;
-      return parseFloat(String(v).replace(/s$/i,'').replace(',','.'))||0;
-    };
-    const durMin = (start,end) => {  // minutos entre Start Time e End Time
-      try{
-        const a = new Date(String(start).replace(' ','T'));
-        const b = new Date(String(end).replace(' ','T'));
-        const m = Math.round((b-a)/60000);
-        return (isFinite(m) && m>0) ? m : 0;
-      }catch(e){ return 0; }
+    const money = toNum, numK = v=>Math.round(toNum(v)), pct = toNum, secs = toNum;
+    const durMin = (durStr,start,end) => {       // "1h19m" -> minutos; senão diferença End-Start
+      const s=String(durStr==null?'':durStr).trim();
+      const hm=s.match(/(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?/i);
+      if(hm && (hm[1]||hm[2])) return (parseInt(hm[1]||0,10)*60)+parseInt(hm[2]||0,10);
+      const pure=parseInt(s,10); if(isFinite(pure)&&pure>0&&!/[:hm]/i.test(s)) return pure;
+      try{ const a=new Date(String(start).replace(' ','T')), b=new Date(String(end).replace(' ','T')); const mm=Math.round((b-a)/60000); return (isFinite(mm)&&mm>0)?mm:0; }catch(e){ return 0; }
     };
 
     const novos = [];
-    for(let i=3; i<rows.length; i++){
+    for(let i=hRow+1; i<rows.length; i++){
       const r = rows[i];
-      if(!r || !r[1] || !r[2]) continue;            // precisa de Room Title (col1) e Start Time (col2)
-      const dt = String(r[2]).slice(0,16);          // '2026-01-28 11:41'
+      const titleRaw = String(at(r,I.title)||'').trim();
+      const startRaw = String(at(r,I.start)||'').trim();
+      if(!titleRaw || !startRaw) continue;          // precisa de Room Title e Start Time
+      const dt = startRaw.slice(0,16);              // '2026-01-28 11:41'
       const d = dt.slice(0,10);
       const h = parseInt(dt.slice(11,13)) || 0;
       const dateObj = new Date(d+'T00:00:00');
       if(isNaN(dateObj.getTime())) continue;         // ignora linha sem data válida
       const w = (dateObj.getDay()+6)%7;
-      const title = String(r[1]||'').trim().toUpperCase();
+      const title = titleRaw.toUpperCase();
       let t = title;
       if(title.includes('LUXO BARATO')) t='LUXO BARATO';
       else if(title.includes('MANDACARU')) t='KIT MANDACARU';
@@ -8393,17 +8405,17 @@ async function handleUpload(file){
 
       novos.push({
         id:'r'+Date.now().toString(36)+(novos.length).toString(36)+Math.random().toString(36).slice(2,6),
-        t, tr: String(r[1]||''), dt, d, h, w,
-        du: durMin(r[2], r[3]),
-        g: money(r[4]), it: numK(r[5]), cu: numK(r[8]),
-        ao: money(r[9]), or: numK(r[6]),
-        v: numK(r[10]), ip: numK(r[11]),
-        gh: money(r[13]),
-        ctr: pct(r[19]), fr: pct(r[27]),
-        pc: numK(r[21]), pi: numK(r[20]),
-        nf: numK(r[26]),
-        lk: numK(r[32]), cm: numK(r[28]), sh: numK(r[30]),
-        avd: secs(r[16]),
+        t, tr: titleRaw, dt, d, h, w,
+        du: durMin(at(r,I.dur), startRaw, at(r,I.end)),
+        g: money(at(r,I.gmv)), it: numK(at(r,I.items)), cu: numK(at(r,I.cust)),
+        ao: money(at(r,I.aov)), or: numK(at(r,I.orders)),
+        v: numK(at(r,I.views)), ip: numK(at(r,I.imp)),
+        gh: money(at(r,I.gmvph)),
+        ctr: pct(at(r,I.ctr)), fr: pct(at(r,I.fr)),
+        pc: numK(at(r,I.pclk)), pi: numK(at(r,I.pimp)),
+        nf: numK(at(r,I.nf)),
+        lk: numK(at(r,I.likes)), cm: numK(at(r,I.comm)), sh: numK(at(r,I.shr)),
+        avd: secs(at(r,I.avd)),
       });
     }
     if(novos.length===0){ toast('Erro','Nenhum dado válido','err',5000); return; }
@@ -8624,7 +8636,7 @@ showTudo();
   const SB = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   const TABLE = 'livedash_state';
   const LA_KEYS = ['la-stores','la-stores-stamp','la-premio','la-theme','la-accent','la-secorder','la-brand-logo'];
-  let pushTimer=null, restoring=false, currentUser=null;
+  let pushTimer=null, restoring=false, currentUser=null, lastPushedJSON='';
 
   function rowKey(){ return SHARED_DATA ? 'shared' : (currentUser ? currentUser.id : ''); }
 
@@ -8707,10 +8719,15 @@ showTudo();
       try{ localTime = parseInt(localStorage.getItem('la-mtime')||'0',10) || 0; }catch(e){}
       var hasLocal = Array.isArray(localStores) && localStores.length>0;
       var hasCloud = Array.isArray(cloudStores) && cloudStores.length>0;
-      // 1) LOCAL mais novo que a nuvem -> NÃO sobrescreve (o push pode ter morrido ao fechar a aba); sobe o local
+      // 1) LOCAL mais novo que a nuvem -> NÃO sobrescreve; sobe o local (push pode ter morrido ao fechar a aba)
       if(hasLocal && localTime > cloudTime){
         sessionStorage.setItem('sb-synced','1');
         await cloudPush(true);
+        return 'ok';
+      }
+      // 1b) LOCAL e nuvem na mesma hora -> já sincronizado: não recarrega (evita o reload a cada abertura)
+      if(hasLocal && localTime === cloudTime){
+        sessionStorage.setItem('sb-synced','1');
         return 'ok';
       }
       // 2) Nuvem tem lojas e é a mais recente -> restaura e recarrega
@@ -8750,9 +8767,14 @@ showTudo();
     const doPush = async function(){
       pushTimer=null;
       try{
-        var rr = await SB.from(TABLE).upsert({ key: rowKey(), data: gatherBlob(), updated_at: new Date().toISOString() }, { onConflict:'key' });
+        const ts = Date.now();
+        const payload = gatherBlob();
+        const pj = JSON.stringify(payload);
+        try{ localStorage.setItem('la-mtime', String(ts)); }catch(e){}   // carimba a hora local = hora do push
+        if(pj === lastPushedJSON) return;                                // nada mudou desde o último envio -> não reenvia
+        var rr = await SB.from(TABLE).upsert({ key: rowKey(), data: payload, updated_at: new Date(ts).toISOString() }, { onConflict:'key' });
         if(rr && rr.error){ console.warn('push', rr.error); sbToast(false,'Falha ao salvar na nuvem'); }
-        else { sbToast(true,'Salvo \u2713'); }
+        else { lastPushedJSON = pj; sbToast(true,'Salvo \u2713'); }
       }catch(e){ console.warn('push', e); sbToast(false,'Falha ao salvar na nuvem'); }
     };
     if(immediate){ if(pushTimer){ clearTimeout(pushTimer); pushTimer=null; } await doPush(); return; }
@@ -8779,6 +8801,8 @@ showTudo();
     b.onclick=async function(){
       try{ await cloudPush(true); }catch(e){}
       LA_KEYS.forEach(function(k){ localStorage.removeItem(k); }); // limpa local pra nao vazar p/ proximo login
+      try{ localStorage.removeItem('la-mtime'); }catch(e){}
+      lastPushedJSON='';
       sessionStorage.removeItem('sb-synced');
       try{ await SB.auth.signOut(); }catch(e){}
       location.reload();
