@@ -7615,8 +7615,14 @@ function prefixTok(t){ const tok=(String(t||'').trim().split(/[\s\-_:.|]+/)[0])|
 function resolveResp(reg, storeId){
   ensureResp();
   if(PREMIO.overrides && PREMIO.overrides[reg.id]!=null) return PREMIO.overrides[reg.id];
-  const am=respAliasMap(), tk=prefixTok(reg.tr || reg.t);
-  if(tk && am[tk]) return isDona(am[tk]) ? '__sem__' : am[tk];
+  const am=respAliasMap();
+  // Varre TODAS as palavras do nome (não só a 1ª). Código casa como PALAVRA INTEIRA:
+  // "AL" casa com "AL", mas não com "ALS"/"ALMOFADA"/"kiTS".
+  const words=String(reg.tr || reg.t || '').match(/[A-Za-z0-9À-ÿ]+/g) || [];
+  for(let i=0;i<words.length;i++){
+    const k=words[i].toUpperCase().replace(/[^A-Z0-9]/g,'');
+    if(k && am[k]) return isDona(am[k]) ? '__sem__' : am[k];
+  }
   if((reg.d||'') <= (PREMIO.viraISO||'')){
     const st=STORES.find(s=>s.id===storeId);
     if(st){ const p=(PREMIO.responsaveis||[]).find(pp=>pp.lojaFallback && pp.lojaFallback.toUpperCase()===String(st.name||'').toUpperCase()); if(p) return p.dona ? '__sem__' : p.id; }
@@ -7870,7 +7876,7 @@ function openRespCfg(){
   ensureResp();
   const list=(PREMIO.responsaveis||[]).map(rcfgRowHtml).join('');
   document.getElementById('respCfgBody').innerHTML=
-    '<div class="rcfg-hint">O <b>prefixo no nome da live</b> manda na atribuição (ex.: <b>AL</b> Kit Cozinha = Alessandra). A <b>loja-dona</b> serve só pra puxar lives <b>antigas sem prefixo</b> (até a data de virada). Marque <b>dona</b> em quem não entra no cálculo do prêmio.</div>'+
+    '<div class="rcfg-hint">O <b>código no nome da live</b> manda na atribuição — vale em <b>qualquer posição</b>, contanto que seja uma <b>palavra inteira</b> (ex.: <b>AL</b> casa em "Kit Cozinha AL", mas <b>ALS</b> não). A <b>loja-dona</b> serve só pra puxar lives <b>antigas sem código</b> (até a data de virada). Marque <b>dona</b> em quem não entra no cálculo do prêmio.</div>'+
     '<div id="rcfgList">'+list+'</div>'+
     '<button class="comm-cfg-btn" onclick="addRespRow()" style="margin:6px 0 14px">+ adicionar pessoa</button>'+
     '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:12px"><label style="font-size:12px;color:var(--text-3)">Data de virada (loja → prefixo):</label><input type="date" id="rcfgVira" value="'+(PREMIO.viraISO||'')+'" style="padding:7px 9px;border-radius:7px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:12px"><button class="comm-cfg-btn" onclick="saveRespCfg()" style="margin-left:auto;background:var(--accent);color:#fff;border-color:var(--accent)">salvar</button></div>';
@@ -8798,14 +8804,22 @@ showTudo();
     const b=document.createElement('button');
     b.id='sbLogoutBtn'; b.textContent='Sair';
     b.style.cssText='position:fixed;bottom:54px;left:14px;z-index:99998;background:#1a1d2b;color:#cbd0e0;border:1px solid #2c3142;border-radius:9px;padding:7px 13px;font-size:12px;font-weight:600;cursor:pointer;opacity:.85';
-    b.onclick=async function(){
-      try{ await cloudPush(true); }catch(e){}
-      LA_KEYS.forEach(function(k){ localStorage.removeItem(k); }); // limpa local pra nao vazar p/ proximo login
-      try{ localStorage.removeItem('la-mtime'); }catch(e){}
-      lastPushedJSON='';
-      sessionStorage.removeItem('sb-synced');
-      try{ await SB.auth.signOut(); }catch(e){}
-      location.reload();
+    b.onclick=function(){
+      b.disabled=true;
+      // Mostra a tela de saída NA HORA (sensação instantânea), sincroniza/desloga por trás
+      var lo=document.createElement('div');
+      lo.style.cssText='position:fixed;inset:0;z-index:2147483600;background:#0c0e16;color:#fff;display:flex;align-items:center;justify-content:center;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif';
+      lo.innerHTML='<div style="opacity:.7">Saindo…</div>';
+      document.documentElement.appendChild(lo);
+      (async function(){
+        try{ await cloudPush(true); }catch(e){}                       // garante a última edição na nuvem (quase sempre no-op por causa do dedupe)
+        LA_KEYS.forEach(function(k){ localStorage.removeItem(k); });  // limpa local pra nao vazar p/ proximo login
+        try{ localStorage.removeItem('la-mtime'); }catch(e){}
+        lastPushedJSON='';
+        sessionStorage.removeItem('sb-synced');
+        try{ await SB.auth.signOut({ scope:'local' }); }catch(e){}    // local = não espera o servidor revogar (bem mais rápido)
+        location.reload();
+      })();
     };
     document.body.appendChild(b);
   }
