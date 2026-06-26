@@ -547,6 +547,9 @@ body.ed-on .ed-block:hover{outline-color:color-mix(in srgb,var(--accent) 50%,tra
 body.ed-on .ed-handle{display:inline-flex;position:absolute;top:-13px;left:14px;z-index:30;align-items:center;gap:6px;height:25px;padding:0 12px;border-radius:999px;background:var(--accent);color:#fff;font:700 10px/1 'Inter',sans-serif;letter-spacing:.05em;text-transform:uppercase;cursor:grab;box-shadow:0 4px 12px -3px var(--accent);user-select:none;touch-action:none;white-space:nowrap}
 body.ed-on .ed-block.ed-drag{outline:2px solid var(--accent);box-shadow:0 14px 34px -8px var(--accent)}
 body.ed-on .ed-block.ed-drag .ed-handle{cursor:grabbing}
+/* ── Prévia do perfil CELULAR no PC (editor): estreita a .page e põe moldura ── */
+body.ed-mobile .page{max-width:430px;margin-top:34px;border:1px solid var(--border-2);border-radius:24px;box-shadow:0 22px 70px -24px rgba(0,0,0,.6);padding-left:16px;padding-right:16px}
+body.ed-mobile .page::before{content:'\1F4F1  PRÉVIA CELULAR';position:absolute;top:-13px;left:50%;transform:translateX(-50%);z-index:40;padding:4px 13px;border-radius:999px;background:var(--accent);color:#fff;font:700 9px/1 'Inter',sans-serif;letter-spacing:.08em;white-space:nowrap;box-shadow:0 4px 12px -3px var(--accent)}
 #edBtn{display:none!important}
 body.ed-on #edBtn{display:flex!important;background:var(--accent)!important;color:#fff!important;border-color:var(--accent)!important;box-shadow:0 6px 18px -5px var(--accent)!important}
 @keyframes fIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
@@ -3622,8 +3625,8 @@ var LiveBlocks=(function(){
   function doPush(){ pushT=null; if(!canCloud())return; var k=key(); LiveAccount.rowGet(k).then(function(c){ var cc=c?norm(c):null; if(cc&&cc._m>ST._m){ ST=cc; writeCache(); applyAll(); } else { LiveAccount.rowSet(k,ST); } },function(){ LiveAccount.rowSet(k,ST); }); }
   function push(){ if(pushT)clearTimeout(pushT); pushT=setTimeout(doPush,500); }
   function setOrder(k,ids){ init(); var d=curDev(); if(!ST[d])ST[d]={}; ST[d][k]=ids.slice(); ST._m=Date.now(); writeCache(); push(); }
-  function setEditDevice(d){ editDev=(d==='mobile'?'mobile':'pc'); applyAll(); }
-  function resetEditDevice(){ editDev=null; applyAll(); }
+  function setEditDevice(d){ editDev=(d==='mobile'?'mobile':'pc'); try{ document.body.classList.toggle('ed-mobile', editDev==='mobile'); }catch(e){} applyAll(); }
+  function resetEditDevice(){ editDev=null; try{ document.body.classList.remove('ed-mobile'); }catch(e){} applyAll(); }
   function syncFromCloud(){ init(); if(!canCloud())return; var k=key(); LiveAccount.rowGet(k).then(function(c){ if(c){ var cc=norm(c); if(cc._m>=ST._m){ ST=cc; writeCache(); } else { LiveAccount.rowSet(k,ST);} } else { LiveAccount.rowSet(k,ST);} applyAll(); },function(){}); }
   return {init:init,order:order,setOrder:setOrder,syncFromCloud:syncFromCloud,dev:dev,editDevice:curDev,setEditDevice:setEditDevice,resetEditDevice:resetEditDevice};
 })();
@@ -5172,42 +5175,43 @@ showTudo();
     try{
       const r = await SB.from(TABLE).select('data, updated_at').eq('key', rowKey()).maybeSingle();
       if(r.error){ console.warn('pull', r.error); sessionStorage.setItem('sb-synced','1'); return 'ok'; }
-      // --- estado da NUVEM: lojas + quando foi atualizada ---
-      var blob=null, cloudStores=null, cloudTime=0;
+      // --- estado da NUVEM: existe linha? blob + hora ---
+      // (DADOS SÃO COMPARTILHADOS entre dispositivos: a nuvem é a fonte da verdade.
+      //  Comparamos por TEMPO, não por "tem loja ou não" — assim deleção (linha vazia
+      //  porém mais nova) se propaga em vez de ser desfeita pelo cache velho do outro device.)
+      var hasCloudRow = !!(r.data && r.data.data);
+      var blob=null, cloudTime=0;
       try{
-        if(r.data && r.data.data){
-          blob = (typeof r.data.data==='string') ? JSON.parse(r.data.data) : r.data.data;
-          if(blob && blob['la-stores']) cloudStores = JSON.parse(blob['la-stores']);
-        }
+        if(hasCloudRow) blob = (typeof r.data.data==='string') ? JSON.parse(r.data.data) : r.data.data;
         if(r.data && r.data.updated_at) cloudTime = new Date(r.data.updated_at).getTime() || 0;
       }catch(e){}
-      // --- estado LOCAL: lojas + hora da última edição local ---
-      var localStores=null, localTime=0;
-      try{ var ls=localStorage.getItem('la-stores'); if(ls) localStores=JSON.parse(ls); }catch(e){}
+      // --- estado LOCAL: hora da última edição + tem alguma chave la-* salva? ---
+      var localTime=0, hasLocalKeys=false;
       try{ localTime = parseInt(localStorage.getItem('la-mtime')||'0',10) || 0; }catch(e){}
-      var hasLocal = Array.isArray(localStores) && localStores.length>0;
-      var hasCloud = Array.isArray(cloudStores) && cloudStores.length>0;
-      // 1) LOCAL mais novo que a nuvem -> NÃO sobrescreve; sobe o local (push pode ter morrido ao fechar a aba)
-      if(hasLocal && localTime > cloudTime){
+      try{ hasLocalKeys = LA_KEYS.some(function(k){ return localStorage.getItem(k)!=null; }); }catch(e){}
+
+      // 0) SEM linha na nuvem -> primeiro uso deste usuário: sobe o local (seed) se houver, e pronto
+      if(!hasCloudRow){
         sessionStorage.setItem('sb-synced','1');
-        await cloudPush(true);
+        if(hasLocalKeys) await cloudPush(true);
         return 'ok';
       }
-      // 1b) LOCAL e nuvem na mesma hora -> já sincronizado: não recarrega (evita o reload a cada abertura)
-      if(hasLocal && localTime === cloudTime){
-        sessionStorage.setItem('sb-synced','1');
-        return 'ok';
-      }
-      // 2) Nuvem tem lojas E é mais recente que o local -> restaura e recarrega
-      if(hasCloud && blob && cloudTime > localTime){
+      // 1) NUVEM MAIS NOVA que o local -> ela manda: restaura (mesmo VAZIA = deleção propaga) e recarrega
+      if(cloudTime > localTime){
         restoring=true;
-        LA_KEYS.forEach(function(k){ if(blob[k]!=null) localStorage.setItem(k, blob[k]); else localStorage.removeItem(k); });
+        LA_KEYS.forEach(function(k){ if(blob && blob[k]!=null) localStorage.setItem(k, blob[k]); else localStorage.removeItem(k); });
+        try{ localStorage.setItem('la-mtime', String(cloudTime)); }catch(e){} // alinha relógio local c/ a nuvem (não re-sobe no reload)
         restoring=false;
         sessionStorage.setItem('sb-synced','1');
         location.reload();
         return 'reloaded';
       }
-      // 3) Nuvem vazia/sem lojas -> sobe o local (seed/edição) e NÃO apaga nada
+      // 2) Mesma hora -> já sincronizado: não recarrega (evita o reload a cada abertura)
+      if(cloudTime === localTime){
+        sessionStorage.setItem('sb-synced','1');
+        return 'ok';
+      }
+      // 3) LOCAL mais novo (edição real que não chegou a subir antes de fechar a aba) -> sobe
       sessionStorage.setItem('sb-synced','1');
       await cloudPush(true);
       return 'ok';
